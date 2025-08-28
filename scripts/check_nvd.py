@@ -74,13 +74,14 @@ def filter_assets(vulns):
 # FUNÇÃO: Apaga mensagens antigas (>6h)
 # -------------------------------
 async def cleanup_messages(channel):
-    now = datetime.datetime.utcnow()
-    async for msg in channel.history(limit=50):  # limita para não sobrecarregar
+    now = datetime.datetime.now(datetime.timezone.utc)  # corrigido para aware
+    async for msg in channel.history(limit=50):
         if (now - msg.created_at).total_seconds() > 21600:  # 6h em segundos
             try:
                 await msg.delete()
             except:
                 pass
+
 
 
 # -------------------------------
