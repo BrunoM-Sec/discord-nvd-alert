@@ -10,16 +10,13 @@ from discord.ext import commands, tasks
 # -------------------------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")   # Defina no ambiente (seguro)
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))  # Canal alvo
-
-# CPEs dos ativos monitorados
-ASSETS = {
-    "Red Hat Enterprise Linux 9": "cpe:2.3:o:redhat:enterprise_linux:9",
-    "Oracle Database 19c": "cpe:2.3:a:oracle:database:19c",
-    "Juniper MX Series": "cpe:2.3:h:juniper:mx_series",
-    "Ubuntu 22.04 LTS (Jammy Jellyfish)": "cpe:2.3:o:canonical:ubuntu_linux:22.04",
-    "Mozila Firefox": "cpe:2.3:a:mozilla:firefox:*"
-}
-
+ASSETS = [
+    "Red Hat Enterprise Linux 9",
+    "Oracle Database 19c",
+    "Juniper MX Series",
+    "Ubuntu 22.04 LTS",
+    "Mozila Firefox"
+]  # Ativos monitorados
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=20"
 
 # -------------------------------
@@ -34,13 +31,16 @@ if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
         json.dump([], f)
 
+
 def load_seen():
     with open(DB_FILE, "r") as f:
         return json.load(f)
 
+
 def save_seen(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f)
+
 
 # -------------------------------
 # FUNÇÃO: Consulta CVEs na NVD
@@ -55,46 +55,47 @@ def fetch_nvd():
         print(f"Erro ao consultar NVD: {e}")
         return []
 
+
 # -------------------------------
-# FUNÇÃO: Filtra ativos monitorados por CPE
+# FUNÇÃO: Filtra ativos monitorados
 # -------------------------------
 def filter_assets(vulns):
-    matched = {}
+    matched = []
     for v in vulns:
         cve = v.get("cve", {})
-        cpes = [cp["cpe23Uri"] for cp in cve.get("configurations", {}).get("nodes", []) if "cpe23Uri" in cp]
-        for asset_name, asset_cpe in ASSETS.items():
-            for cpe in cpes:
-                if asset_cpe.lower() in cpe.lower():
-                    # Mantém apenas a mais recente por ativo
-                    if asset_name not in matched:
-                        descs = cve.get("descriptions", [])
-                        desc_text = " ".join(d["value"] for d in descs if "value" in d)
-                        matched[asset_name] = {
-                            "id": cve.get("id"),
-                            "asset": asset_name,
-                            "desc": desc_text[:200] + "...",
-                            "url": f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}"
-                        }
-    return list(matched.values())
+        descs = cve.get("descriptions", [])
+        desc_text = " ".join(d["value"] for d in descs if "value" in d)
+
+        for asset in ASSETS:
+            if asset.lower() in desc_text.lower():
+                matched.append({
+                    "id": cve.get("id"),
+                    "asset": asset,
+                    "desc": desc_text[:200] + "...",
+                    "url": f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}"
+                })
+    return matched
+
 
 # -------------------------------
 # FUNÇÃO: Apaga mensagens antigas (>6h)
 # -------------------------------
 async def cleanup_messages(channel):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)  # datetime aware em UTC
     async for msg in channel.history(limit=50):
-        if (now - msg.created_at).total_seconds() > 21600:  # 6h
+        if (now - msg.created_at).total_seconds() > 21600:  # 6h em segundos
             try:
                 await msg.delete()
             except:
                 pass
+
 
 # -------------------------------
 # FUNÇÃO: Envia alerta
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
+
     if alerts:
         for a in alerts:
             if a["id"] not in seen:
@@ -111,29 +112,32 @@ async def send_alerts(channel, alerts):
         save_seen(seen)
     else:
         # Nenhum alerta novo
-        ativos = ", ".join(ASSETS.keys())
+        ativos = ", ".join(ASSETS)
         await channel.send(
             f"✅ Nenhuma nova vulnerabilidade encontrada.\n"
             f"Ativos monitorados: {ativos}\n"
             f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
         )
 
+
 # -------------------------------
 # LOOP AUTOMÁTICO
 # -------------------------------
-@tasks.loop(minutes=40)  # agora roda de 40 em 40 minutos
+@tasks.loop(minutes=40)  # intervalo padrão: 40 min
 async def check_nvd_task():
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
-        await cleanup_messages(channel)
+        await cleanup_messages(channel)  # limpa msgs antigas
         vulns = fetch_nvd()
         alerts = filter_assets(vulns)
         await send_alerts(channel, alerts)
+
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
     check_nvd_task.start()
+
 
 # -------------------------------
 # INICIAR BOT
