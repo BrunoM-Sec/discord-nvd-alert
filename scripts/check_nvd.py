@@ -1,7 +1,7 @@
 import requests
 import json
 import os
-import datetime
+from datetime import datetime, timezone
 import discord
 from discord.ext import commands, tasks
 
@@ -99,7 +99,7 @@ async def send_alerts(channel, alerts):
                     f"**Ativo:** {a['asset']}\n"
                     f"**Descrição:** {a['desc']}\n"
                     f"🔗 {a['url']}\n"
-                    f"🕒 {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                    f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
                 )
                 await channel.send(msg)
                 seen.append(a["id"])
@@ -110,7 +110,7 @@ async def send_alerts(channel, alerts):
         await channel.send(
             f"✅ Nenhuma nova vulnerabilidade encontrada.\n"
             f"Ativos monitorados: {ativos}\n"
-            f"🕒 {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            f"🕒 datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
         )
 
 
