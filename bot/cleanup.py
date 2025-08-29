@@ -1,54 +1,54 @@
 import discord
 from discord.ext import tasks
-from datetime import datetime, timedelta
+import datetime
 import asyncio
-from utils import format_cve_message
 
 # ---------- Configurações ----------
-AUTO_CLEAN_INTERVAL_MIN = 6 * 60 + 20  # 6h20min em minutos
-PRESERVE_WINDOW_MIN = 60  # preserva mensagens normais recentes (1 hora)
+AUTO_CLEAN_INTERVAL = 6 * 60 + 20  # minutos -> 6h20min
+PRESERVE_MINUTES = 20  # últimas 20 minutos de mensagens normais preservadas
 
-# ---------- Loop de limpeza ----------
 @tasks.loop(minutes=1)
 async def auto_cleanup(bot):
     """
     Executa limpeza automática de mensagens não críticas.
-    Preserva mensagens recentes e críticas.
+    - Só dispara após atingir AUTO_CLEAN_INTERVAL de uptime.
+    - Preserva mensagens recentes (últimos PRESERVE_MINUTES minutos).
+    - Mensagens críticas (contêm "CRITICAL") são mantidas.
     """
-    now = datetime.utcnow()
-    
-    # Inicializa last_cleanup se não existir
-    if not hasattr(bot, "last_cleanup"):
-        bot.last_cleanup = bot.uptime_start
+    now = datetime.datetime.utcnow()
+    uptime_minutes = (now - bot.uptime_start).total_seconds() / 60
 
-    # Checa se já passou o intervalo
-    minutes_since_last = (now - bot.last_cleanup).total_seconds() / 60
-    if minutes_since_last < AUTO_CLEAN_INTERVAL_MIN:
-        return  # ainda não é hora de limpar
+    if uptime_minutes < AUTO_CLEAN_INTERVAL:
+        return  # Ainda não é hora de limpar
 
     channel = bot.get_channel(bot.channel_id)
     if channel is None:
-        print("[WARN] Canal não encontrado para cleanup.")
+        print("Canal não encontrado para auto-clean.")
         return
 
     try:
-        async for message in channel.history(limit=500, after=now - timedelta(hours=6)):
-            # Considera mensagem crítica se contém [CRITICAL]
-            is_critical = "[CRITICAL]" in message.content.upper()
-            
-            message_age_min = (now - message.created_at).total_seconds() / 60
-            
-            if not is_critical and message_age_min > PRESERVE_WINDOW_MIN:
+        async for message in channel.history(limit=500):
+            # Ignora mensagens não do bot
+            if message.author != bot.user:
+                continue
+
+            # Identifica mensagens críticas
+            is_critical = "CRITICAL" in message.content.upper()
+            age_minutes = (now - message.created_at).total_seconds() / 60
+
+            # Deleta mensagens não críticas antigas
+            if not is_critical and age_minutes > PRESERVE_MINUTES:
                 try:
                     await message.delete()
-                    await asyncio.sleep(0.5)  # evitar flood
+                    await asyncio.sleep(0.3)  # evitar flood do Discord
                 except discord.errors.Forbidden:
-                    print("[ERROR] Sem permissão para deletar mensagem.")
-                except discord.errors.HTTPException as e:
-                    print(f"[ERROR] Erro HTTP ao deletar mensagem: {e}")
+                    print("Sem permissão para deletar mensagem.")
+                except discord.errors.HTTPException:
+                    print("Erro HTTP ao deletar mensagem.")
 
-        bot.last_cleanup = now
-        await channel.send("Auto-clean completo: mensagens antigas não críticas foram deletadas.")
-
+        # Reset uptime para o próximo ciclo
+        bot.uptime_start = now
+        await channel.send("Auto-clean completo: mensagens antigas não críticas foram removidas.")
+    
     except Exception as e:
-        print(f"[ERROR] Erro no auto-clean: {e}")
+        print(f"Erro no auto-clean: {e}")
