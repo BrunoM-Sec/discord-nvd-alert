@@ -1,6 +1,5 @@
 name: Discord Threat Intelligence Bot
 
-# Evita múltiplas runs ao mesmo tempo
 concurrency:
   group: discord-nvd-alert
   cancel-in-progress: true
@@ -10,7 +9,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: "0 * * * *"  # roda a cada hora, ajustar conforme necessidade
+    - cron: "0 * * * *"  # Executa a cada hora
 
 jobs:
   run-bot:
