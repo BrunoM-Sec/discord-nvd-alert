@@ -8,7 +8,7 @@ from discord.ext import commands, tasks
 # -------------------------------
 # CONFIGURAÇÕES DO BOT
 # -------------------------------
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # Defina no ambiente
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))
 ASSETS = [
     "Red Hat Enterprise Linux 9",
@@ -25,25 +25,21 @@ NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Arquivo JSON para armazenar CVEs já notificadas
 DB_FILE = "seen_bd.json"
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
-        json.dump([], f)
-
+        json.dump([], f, indent=2)
 
 def load_seen():
     with open(DB_FILE, "r") as f:
         return json.load(f)
 
-
 def save_seen(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-
 # -------------------------------
-# CONSULTA CVEs NVD
+# FUNÇÃO: Consulta CVEs na NVD
 # -------------------------------
 def fetch_nvd():
     try:
@@ -55,12 +51,11 @@ def fetch_nvd():
         print(f"Erro ao consultar NVD: {e}")
         return []
 
-
 # -------------------------------
-# FILTRA ATIVOS E PEGA A ÚLTIMA CVE POR ATIVO
+# FUNÇÃO: Filtra últimas 2 CVEs por ativo
 # -------------------------------
-def filter_assets_last(vulns):
-    matched = {asset: None for asset in ASSETS}
+def filter_assets_last_two(vulns):
+    matched = {asset: [] for asset in ASSETS}  # armazena até 2 CVEs por ativo
 
     for v in vulns:
         cve = v.get("cve", {})
@@ -71,66 +66,59 @@ def filter_assets_last(vulns):
 
         for asset in ASSETS:
             if asset.lower() in desc_text.lower():
-                if matched[asset] is None or published > matched[asset]["published"]:
-                    matched[asset] = {
-                        "id": cve_id,
-                        "desc": desc_text[:200] + "...",
-                        "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
-                        "published": published
-                    }
+                matched[asset].append({
+                    "id": cve_id,
+                    "desc": desc_text[:200] + "...",
+                    "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+                    "published": published
+                })
+                # mantém apenas 2 últimas CVEs
+                matched[asset] = sorted(matched[asset], key=lambda x: x["published"], reverse=True)[:2]
+
     return matched
 
-
 # -------------------------------
-# LIMPA MENSAGENS ANTIGAS (>6h)
+# FUNÇÃO: Limpa mensagens antigas (>6h)
 # -------------------------------
 async def cleanup_messages(channel):
     now = datetime.now(timezone.utc)
     async for msg in channel.history(limit=50):
-        if "Nova Vulnerabilidade" not in msg.content:
+        if "Vulnerabilidade" not in msg.content:
             if (now - msg.created_at).total_seconds() > 21600:
                 try:
                     await msg.delete()
                 except:
                     pass
 
-
 # -------------------------------
-# ENVIA ALERTA NO DISCORD (LAYOUT POR ATIVO)
+# FUNÇÃO: Envia alerta no Discord
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
-    message_lines = ["🚨 @everyone **Nova Vulnerabilidade Encontrada!** 🚨\n"]
+    message = ""
 
-    for asset, cve in alerts.items():
-        if cve:
-            # registra no JSON apenas se CVE nova
-            if cve["id"] not in seen:
-                seen.append(cve["id"])
+    for asset, cves in alerts.items():
+        if cves:
+            latest = cves[0]  # pega a mais recente
+            # se CVE não está no JSON, adiciona e marca nova
+            if latest["id"] not in [s["id"] for s in seen if s["asset"] == asset]:
+                seen.append(latest)
                 any_new = True
-            # formata data/hora UTC para exibição
-            try:
-                dt = datetime.fromisoformat(cve["published"].replace("Z", "+00:00"))
-                published_str = dt.strftime("%Y-%m-%d / %H:%M UTC")
-            except:
-                published_str = cve["published"]
 
-            # adiciona ao corpo da mensagem
-            message_lines.append(f"┏ {asset} ┓")
-            message_lines.append(f"{cve['id']} / {published_str}")
-            message_lines.append(f"🔗 {cve['url']}\n")
+            message += f"┏ {asset} ┓\n"
+            message += f"{latest['id']} / {latest['published']}\n"
+            message += f"🔗 {latest['url']}\n\n"
 
     save_seen(seen)
 
     if any_new:
-        await channel.send("\n".join(message_lines))
+        await channel.send(content=f"@everyone\n{message}")
     else:
-        # Mensagem quando nenhuma nova CVE
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        message = f"✅ Nenhuma nova vulnerabilidade encontrada.\nAtivos monitorados: {', '.join(ASSETS)}\n🕒 {now_str}"
-        await channel.send(message)
-
+        # nenhuma nova CVE, apenas exibe últimas conhecidas
+        if message == "":
+            message = "Nenhuma CVE registrada ainda."
+        await channel.send(content=f"✅ Nenhuma nova vulnerabilidade encontrada.\n{message}")
 
 # -------------------------------
 # LOOP AUTOMÁTICO
@@ -141,17 +129,15 @@ async def check_nvd_task():
     if channel:
         await cleanup_messages(channel)
         vulns = fetch_nvd()
-        alerts = filter_assets_last(vulns)
+        alerts = filter_assets_last_two(vulns)
         await send_alerts(channel, alerts)
-
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
     check_nvd_task.start()
 
-
 # -------------------------------
-# INICIA O BOT
+# INICIAR BOT
 # -------------------------------
 bot.run(DISCORD_TOKEN)
