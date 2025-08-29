@@ -8,15 +8,15 @@ from discord.ext import commands, tasks
 # -------------------------------
 # CONFIGURAÇÕES DO BOT
 # -------------------------------
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")   # Defina no ambiente (seguro)
+CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))  # Canal alvo
 ASSETS = [
     "Red Hat Enterprise Linux 9",
     "Oracle Database 19c",
     "Juniper MX Series",
     "Ubuntu 22.04 LTS",
     "Mozila Firefox"
-]
+]  # Ativos monitorados
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 
 # -------------------------------
@@ -25,6 +25,7 @@ NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Base simples para evitar alertas repetidos
 DB_FILE = "seen_bd.json"
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
@@ -56,7 +57,7 @@ def fetch_nvd():
 
 
 # -------------------------------
-# FUNÇÃO: Filtra ativos e pega a última CVE
+# FUNÇÃO: Filtra ativos monitorados e pega apenas a última CVE
 # -------------------------------
 def filter_assets_last(vulns):
     matched = {asset: None for asset in ASSETS}
@@ -95,44 +96,43 @@ async def cleanup_messages(channel):
 
 
 # -------------------------------
-# FUNÇÃO: Envia alerta no Discord (plain text)
+# FUNÇÃO: Envia alerta usando Embed
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
-    msg_lines = []
 
+    embed = discord.Embed(title="🚨 Alerta de Vulnerabilidades", color=0xff0000, timestamp=datetime.now(timezone.utc))
     for asset, cve in alerts.items():
         if cve:
-            # marca como nova se não estiver no JSON
+            any_new = True
             if cve["id"] not in seen:
                 seen.append(cve["id"])
-                any_new = True
-            # separa por ativo no formato desejado
-            msg_lines.append(
-                f"┣ {asset} ┩\n"
-                f"{cve['id']} / {cve['published']} UTC\n"
-                f"🔗 {cve['url']}\n"
+            embed.add_field(
+                name=f"{asset}",
+                value=f"**CVE:** {cve['id']}\n**Publicado:** {cve['published']}\n🔗 [Link para CVE]({cve['url']})",
+                inline=False
             )
 
     save_seen(seen)
 
     if any_new:
-        message = "@everyone\n\n" + "\n".join(msg_lines)
-        await channel.send(message)
+        embed.set_footer(text="@everyone")
+        await channel.send(content="@everyone", embed=embed)
     else:
-        message = (
-            "✅ Nenhuma nova vulnerabilidade encontrada.\n"
-            "Ativos monitorados: " + ", ".join(ASSETS) + "\n"
-            f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        embed = discord.Embed(
+            title="✅ Nenhuma nova vulnerabilidade encontrada",
+            description="Ativos monitorados: " + ", ".join(ASSETS),
+            color=0x00ff00,
+            timestamp=datetime.now(timezone.utc)
         )
-        await channel.send(message)
+        await channel.send(embed=embed)
 
 
 # -------------------------------
 # LOOP AUTOMÁTICO
 # -------------------------------
-@tasks.loop(minutes=40)
+@tasks.loop(minutes=40)  # intervalo padrão: 40 min
 async def check_nvd_task():
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
