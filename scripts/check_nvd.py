@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timezone
 import discord
 from discord.ext import commands, tasks
+from dateutil import parser  # precisa instalar com: pip install python-dateutil
 
 # -------------------------------
 # CONFIGURAÇÕES DO BOT
@@ -16,7 +17,7 @@ ASSETS = [
     "Juniper MX Series",
     "Ubuntu 22.04 LTS",
     "Mozila Firefox"
-]  # Ativos monitorados
+]
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 
 # -------------------------------
@@ -29,7 +30,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DB_FILE = "seen_bd.json"
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
-        json.dump([], f, indent=2)
+        json.dump([], f)
 
 
 def load_seen():
@@ -67,27 +68,24 @@ def filter_assets_last(vulns):
         descs = cve.get("descriptions", [])
         desc_text = " ".join(d["value"] for d in descs if "value" in d)
         cve_id = cve.get("id")
-        published_iso = cve.get("published", None)
+        published_raw = cve.get("published", None)
 
-        # Formata a data ISO 8601 para 'YYYY-MM-DD / HH:MM UTC'
-        if published_iso:
-            try:
-                dt = datetime.strptime(published_iso, "%Y-%m-%dT%H:%M:%SZ")
-                published_str = f"{dt.strftime('%Y-%m-%d')} / {dt.strftime('%H:%M')} UTC"
-            except:
-                published_str = published_iso
-        else:
+        # converter data para UTC legível
+        try:
+            published_dt = parser.isoparse(published_raw) if published_raw else None
+            published_str = published_dt.strftime("%Y-%m-%d / %H:%M UTC") if published_dt else "N/A"
+        except:
             published_str = "N/A"
 
         for asset in ASSETS:
             if asset.lower() in desc_text.lower():
-                if matched[asset] is None or (published_iso and published_iso > matched[asset]["published_raw"]):
+                if matched[asset] is None or (published_dt and published_dt > parser.isoparse(matched[asset]["published_raw"])):
                     matched[asset] = {
                         "id": cve_id,
                         "desc": desc_text[:200] + "...",
                         "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
                         "published": published_str,
-                        "published_raw": published_iso  # para comparar datas
+                        "published_raw": published_raw
                     }
     return matched
 
@@ -107,34 +105,33 @@ async def cleanup_messages(channel):
 
 
 # -------------------------------
-# FUNÇÃO: Envia alerta
+# FUNÇÃO: Envia alerta no Discord
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
-
-    message_text = "🚨 **Nova Vulnerabilidade Encontrada!** 🚨\n\n"
+    message_lines = []
 
     for asset, cve in alerts.items():
         if cve:
-            any_new = True
+            # verifica se é nova
             if cve["id"] not in seen:
                 seen.append(cve["id"])
-            message_text += (
-                f"┣ {asset} ┩\n"
-                f"{cve['id']} / {cve['published']}\n"
-                f"🔗 {cve['url']}\n\n"
-            )
+                any_new = True
+            # cria layout por ativo
+            line = f"┣ {asset} ┩\n{cve['id']} / {cve['published']}\n🔗 {cve['url']}"
+            message_lines.append(line)
+        else:
+            # caso não haja CVE ainda
+            message_lines.append(f"┣ {asset} ┩\nNenhuma CVE encontrada\n")
 
     save_seen(seen)
 
+    full_message = "\n\n".join(message_lines)
     if any_new:
-        await channel.send(f"@everyone\n{message_text}")
+        await channel.send(content=f"@everyone\n{full_message}")
     else:
-        message_text = "✅ Nenhuma nova vulnerabilidade encontrada.\n"
-        message_text += "Ativos monitorados: " + ", ".join(ASSETS)
-        message_text += f"\n🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
-        await channel.send(message_text)
+        await channel.send(full_message)
 
 
 # -------------------------------
