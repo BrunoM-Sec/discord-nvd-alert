@@ -10,7 +10,7 @@ from discord.ext import commands, tasks
 # ==========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))
-CHECK_EVERY_MINUTES = int(os.getenv("CHECK_EVERY_MINUTES", "40"))  # padrão 40
+CHECK_EVERY_MINUTES = int(os.getenv("CHECK_EVERY_MINUTES", "20"))  # padrão 420
 
 # Ativos monitorados (use exatamente esses nomes; você controla o layout com eles)
 ASSETS = [
