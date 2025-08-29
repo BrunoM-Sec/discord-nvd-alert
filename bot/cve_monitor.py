@@ -1,9 +1,8 @@
 import requests
 import datetime
-from dateutil import parser
-from utils import load_seen_db
+from utils import load_seen_db, is_critical
 
-# Constantes dos ativos monitorados (CPEs estritos)
+# Constantes dos ativos monitorados (CPEs exatos)
 ASSETS_CPE = {
     "Red Hat Enterprise Linux 9": "cpe:2.3:o:redhat:enterprise_linux:9",
     "Oracle Database 19c": "cpe:2.3:a:oracle:database:19c",
@@ -15,23 +14,24 @@ ASSETS_CPE = {
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVE_ORG_URL = "https://cve.mitre.org/cgi-bin/cvename.cgi?name="
 
+MAX_CVES_PER_ASSET = 2  # Pega apenas 2 CVEs mais recentes
 YEARS_LIMIT = 3  # Ignorar CVEs com mais de 3 anos
-MAX_CVES_PER_ASSET = 2  # Apenas as últimas 1-2 CVEs por ativo
 
 def is_recent(published_date_str):
-    try:
-        published_date = parser.parse(published_date_str)
-    except Exception:
-        return False
+    published_date = datetime.datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%f")
     return (datetime.datetime.utcnow() - published_date).days <= YEARS_LIMIT * 365
 
 async def fetch_new_cves(seen_db):
+    """
+    Consulta NVD para buscar CVEs recentes para os ativos específicos.
+    Retorna uma lista de CVEs novas e críticas.
+    """
     new_cves = []
 
     for asset_name, cpe in ASSETS_CPE.items():
         params = {
             "cpeName": cpe,
-            "resultsPerPage": 100,  # pegar todas recentes do último ano
+            "resultsPerPage": MAX_CVES_PER_ASSET,
             "startIndex": 0,
             "sortBy": "publishedDate",
             "orderBy": "desc"
@@ -45,9 +45,11 @@ async def fetch_new_cves(seen_db):
             print(f"Erro ao consultar NVD para {asset_name}: {e}")
             continue
 
-        # Filtrar somente CVEs recentes (<3 anos) e correspondentes ao CPE exato
-        recent_cves = []
+        count = 0
         for item in data.get("vulnerabilities", []):
+            if count >= MAX_CVES_PER_ASSET:
+                break
+
             cve_id = item["cve"]["id"]
             published = item["cve"]["published"]
 
@@ -55,14 +57,7 @@ async def fetch_new_cves(seen_db):
             if not is_recent(published):
                 continue
 
-            # Verificar se o CPE corresponde exatamente
-            cpe_matches = [v["cpe23Uri"] for v in item["cve"].get("configurations", {}).get("nodes", []) if "cpeMatch" in v]
-            exact_match = any(cpe == cm for node in item["cve"].get("configurations", {}).get("nodes", []) 
-                              for cm in node.get("cpeMatch", []) if "cpe23Uri" in cm)
-            if not exact_match:
-                continue
-
-            # Cruzamento básico com CVE.org
+            # Cruzamento com CVE.org
             try:
                 cve_org_response = requests.get(CVE_ORG_URL + cve_id, timeout=5)
                 if cve_id not in cve_org_response.text:
@@ -75,7 +70,7 @@ async def fetch_new_cves(seen_db):
                 is_new = False
             else:
                 is_new = True
-                seen_db[cve_id] = {"asset": asset_name, "timestamp": published}
+                seen_db[cve_id] = {"asset": asset_name, "timestamp": published, "critical": False}
 
             description = next(
                 (desc["value"] for desc in item["cve"]["descriptions"] if desc["lang"] == "en"),
@@ -83,7 +78,7 @@ async def fetch_new_cves(seen_db):
             )
             url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
 
-            # Checar severidade (CVSSv3 e fallback CVSSv2)
+            # Checar severidade (CVSSv3 ou CVSSv2)
             metrics = item["cve"].get("metrics", {})
             cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
             critical = False
@@ -94,16 +89,12 @@ async def fetch_new_cves(seen_db):
                 cvss2 = metrics.get("cvssMetricV2")
                 if cvss2:
                     base_score = cvss2[0]["cvssData"]["baseScore"]
-                else:
-                    # fallback severidade textual
-                    sev_text = item["cve"].get("problemtype", {}).get("problemtype_data", [])
-                    if sev_text:
-                        critical = any("Critical" in pt["description"][0]["value"] for pt in sev_text)
 
-            if base_score >= 9.0:
-                critical = True
+            critical = is_critical(base_score)
+            if is_new:
+                seen_db[cve_id]["critical"] = critical
 
-            recent_cves.append({
+            new_cves.append({
                 "cve_id": cve_id,
                 "description": description,
                 "published_date": published,
@@ -113,8 +104,7 @@ async def fetch_new_cves(seen_db):
                 "asset": asset_name
             })
 
-        # Ordenar por data e pegar somente as MAX_CVES_PER_ASSET mais recentes
-        recent_cves.sort(key=lambda x: x["published_date"], reverse=True)
-        new_cves.extend(recent_cves[:MAX_CVES_PER_ASSET])
+            count += 1
 
+    # Retornar apenas CVEs novas
     return [cve for cve in new_cves if cve["is_new"]]
