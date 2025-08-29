@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timezone
 import discord
 from discord.ext import commands, tasks
+from dateutil import parser  # para formatar datas ISO 8601
 
 # -------------------------------
 # CONFIGURAÇÕES DO BOT
@@ -96,37 +97,45 @@ async def cleanup_messages(channel):
 
 
 # -------------------------------
-# FUNÇÃO: Envia alerta usando Embed
+# FUNÇÃO: Envia alerta no Discord
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
+    msg_lines = []
 
-    embed = discord.Embed(title="🚨 Alerta de Vulnerabilidades", color=0xff0000, timestamp=datetime.now(timezone.utc))
     for asset, cve in alerts.items():
         if cve:
-            any_new = True
+            # marca se houver nova CVE
             if cve["id"] not in seen:
                 seen.append(cve["id"])
-            embed.add_field(
-                name=f"{asset}",
-                value=f"**CVE:** {cve['id']}\n**Publicado:** {cve['published']}\n🔗 [Link para CVE]({cve['url']})",
-                inline=False
+                any_new = True
+
+            # formata data/hora da CVE
+            try:
+                dt = parser.isoparse(cve['published'])
+                published_str = f"{dt.strftime('%Y-%m-%d')} / {dt.strftime('%H:%M')} UTC"
+            except:
+                published_str = cve['published']
+
+            # adiciona linha formatada por ativo
+            msg_lines.append(
+                f"┣ {asset} ┩\n"
+                f"{cve['id']} / {published_str}\n"
+                f"🔗 {cve['url']}\n"
             )
 
     save_seen(seen)
 
     if any_new:
-        embed.set_footer(text="@everyone")
-        await channel.send(content="@everyone", embed=embed)
+        content = "@everyone\n\n" + "\n".join(msg_lines)
+        await channel.send(content=content)
     else:
-        embed = discord.Embed(
-            title="✅ Nenhuma nova vulnerabilidade encontrada",
-            description="Ativos monitorados: " + ", ".join(ASSETS),
-            color=0x00ff00,
-            timestamp=datetime.now(timezone.utc)
+        await channel.send(
+            f"✅ Nenhuma nova vulnerabilidade encontrada.\n"
+            f"Ativos monitorados: {', '.join(ASSETS)}\n"
+            f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
         )
-        await channel.send(embed=embed)
 
 
 # -------------------------------
