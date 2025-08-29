@@ -60,9 +60,7 @@ def fetch_nvd():
 # FUNÇÃO: Filtra ativos monitorados e pega apenas a última CVE
 # -------------------------------
 def filter_assets_last(vulns):
-    matched = {}
-    for asset in ASSETS:
-        matched[asset] = None  # inicializa
+    matched = {asset: None for asset in ASSETS}
 
     for v in vulns:
         cve = v.get("cve", {})
@@ -73,7 +71,6 @@ def filter_assets_last(vulns):
 
         for asset in ASSETS:
             if asset.lower() in desc_text.lower():
-                # se não existe CVE para esse ativo ainda ou é mais recente, atualiza
                 if matched[asset] is None or published > matched[asset]["published"]:
                     matched[asset] = {
                         "id": cve_id,
@@ -109,10 +106,8 @@ async def send_alerts(channel, alerts):
     for asset, cve in alerts.items():
         if cve:
             any_new = True
-            # registra no JSON
             if cve["id"] not in seen:
                 seen.append(cve["id"])
-            # adiciona campo do embed
             embed.add_field(
                 name=f"{asset}",
                 value=f"**CVE:** {cve['id']}\n**Publicado:** {cve['published']}\n🔗 [Link para CVE]({cve['url']})",
