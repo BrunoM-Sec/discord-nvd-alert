@@ -1,22 +1,38 @@
+No discord ainda não está seguindo o layout desejado o que está havendo?
+
+o layout é esse ┣ Red Hat Enterprise Linux 9 ┩
+CVE-2025-12345 / 2025-08-28 / 14:23 UTC
+🔗 https://nvd.nist.gov/vuln/detail/CVE-2025-12345
+
+┣ Oracle Database 19c ┩
+CVE-2025-54321 / 2025-08-27 / 10:12 UTC
+🔗 https://nvd.nist.gov/vuln/detail/CVE-2025-54321
+
+...e assim por diante
+
+que deve funcionar no código :
+
+
+
 import requests
 import json
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import discord
 from discord.ext import commands, tasks
 
 # -------------------------------
 # CONFIGURAÇÕES DO BOT
 # -------------------------------
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")   # Defina no ambiente (seguro)
+CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "123456789"))  # Canal alvo
 ASSETS = [
     "Red Hat Enterprise Linux 9",
     "Oracle Database 19c",
     "Juniper MX Series",
     "Ubuntu 22.04 LTS",
     "Mozila Firefox"
-]
+]  # Ativos monitorados
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 
 # -------------------------------
@@ -25,6 +41,7 @@ NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Base simples para evitar alertas repetidos
 DB_FILE = "seen_bd.json"
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
@@ -56,7 +73,7 @@ def fetch_nvd():
 
 
 # -------------------------------
-# FUNÇÃO: Filtra última CVE por ativo
+# FUNÇÃO: Filtra ativos monitorados e pega apenas a última CVE
 # -------------------------------
 def filter_assets_last(vulns):
     matched = {asset: None for asset in ASSETS}
@@ -66,24 +83,16 @@ def filter_assets_last(vulns):
         descs = cve.get("descriptions", [])
         desc_text = " ".join(d["value"] for d in descs if "value" in d)
         cve_id = cve.get("id")
-        published_str = cve.get("published", None)
-        if not published_str:
-            continue
-
-        # Converte ISO8601 para datetime UTC
-        published_dt = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
-        # Converte para horário de Brasília (UTC-3)
-        published_brt = published_dt - timedelta(hours=3)
+        published = cve.get("published", "N/A")
 
         for asset in ASSETS:
             if asset.lower() in desc_text.lower():
-                if matched[asset] is None or published_dt > matched[asset]["published_dt"]:
+                if matched[asset] is None or published > matched[asset]["published"]:
                     matched[asset] = {
                         "id": cve_id,
                         "desc": desc_text[:200] + "...",
                         "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
-                        "published": published_brt.strftime("%Y-%m-%d / %H:%M BRT"),
-                        "published_dt": published_dt  # para comparação interna
+                        "published": published
                     }
     return matched
 
@@ -103,38 +112,43 @@ async def cleanup_messages(channel):
 
 
 # -------------------------------
-# FUNÇÃO: Envia alerta no Discord
+# FUNÇÃO: Envia alerta usando Embed
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
-    msg_text = "🚨 **Alerta de Vulnerabilidades** 🚨\n\n"
 
+    embed = discord.Embed(title="🚨 Alerta de Vulnerabilidades", color=0xff0000, timestamp=datetime.now(timezone.utc))
     for asset, cve in alerts.items():
         if cve:
             any_new = True
-            # adiciona no JSON se ainda não existe
             if cve["id"] not in seen:
                 seen.append(cve["id"])
-            msg_text += f"┣ {asset} ┩\n"
-            msg_text += f"{cve['id']} / {cve['published']}\n"
-            msg_text += f"🔗 {cve['url']}\n\n"
+            embed.add_field(
+                name=f"{asset}",
+                value=f"**CVE:** {cve['id']}\n**Publicado:** {cve['published']}\n🔗 [Link para CVE]({cve['url']})",
+                inline=False
+            )
 
     save_seen(seen)
 
     if any_new:
-        await channel.send(f"@everyone\n{msg_text}")
+        embed.set_footer(text="@everyone")
+        await channel.send(content="@everyone", embed=embed)
     else:
-        ativos = ", ".join(ASSETS)
-        await channel.send(
-            f"✅ Nenhuma nova vulnerabilidade encontrada.\nAtivos monitorados: {ativos}\n🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+        embed = discord.Embed(
+            title="✅ Nenhuma nova vulnerabilidade encontrada",
+            description="Ativos monitorados: " + ", ".join(ASSETS),
+            color=0x00ff00,
+            timestamp=datetime.now(timezone.utc)
         )
+        await channel.send(embed=embed)
 
 
 # -------------------------------
 # LOOP AUTOMÁTICO
 # -------------------------------
-@tasks.loop(minutes=40)
+@tasks.loop(minutes=40)  # intervalo padrão: 40 min
 async def check_nvd_task():
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
@@ -154,3 +168,4 @@ async def on_ready():
 # INICIAR BOT
 # -------------------------------
 bot.run(DISCORD_TOKEN)
+
