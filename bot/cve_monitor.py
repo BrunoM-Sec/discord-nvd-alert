@@ -1,8 +1,9 @@
 import requests
 import datetime
+from dateutil import parser
 from utils import load_seen_db
 
-# Constantes dos ativos monitorados (CPEs aproximados)
+# Constantes dos ativos monitorados (CPEs estritos)
 ASSETS_CPE = {
     "Red Hat Enterprise Linux 9": "cpe:2.3:o:redhat:enterprise_linux:9",
     "Oracle Database 19c": "cpe:2.3:a:oracle:database:19c",
@@ -14,26 +15,25 @@ ASSETS_CPE = {
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVE_ORG_URL = "https://cve.mitre.org/cgi-bin/cvename.cgi?name="
 
-MAX_CVES_PER_ASSET = 2  # Pegar apenas 1 ou 2 CVEs mais recentes
 YEARS_LIMIT = 3  # Ignorar CVEs com mais de 3 anos
+MAX_CVES_PER_ASSET = 2  # Apenas as últimas 1-2 CVEs por ativo
 
 def is_recent(published_date_str):
-    published_date = datetime.datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%f")
+    try:
+        published_date = parser.parse(published_date_str)
+    except Exception:
+        return False
     return (datetime.datetime.utcnow() - published_date).days <= YEARS_LIMIT * 365
 
 async def fetch_new_cves(seen_db):
-    """
-    Consulta NVD para buscar CVEs recentes para os ativos específicos.
-    Retorna uma lista de CVEs novas e críticas.
-    """
     new_cves = []
 
     for asset_name, cpe in ASSETS_CPE.items():
         params = {
             "cpeName": cpe,
-            "resultsPerPage": MAX_CVES_PER_ASSET,
+            "resultsPerPage": 100,  # pegar todas recentes do último ano
             "startIndex": 0,
-            "sortBy": "publishedDate",  # garante que pegue as mais recentes
+            "sortBy": "publishedDate",
             "orderBy": "desc"
         }
 
@@ -45,11 +45,9 @@ async def fetch_new_cves(seen_db):
             print(f"Erro ao consultar NVD para {asset_name}: {e}")
             continue
 
-        count = 0
+        # Filtrar somente CVEs recentes (<3 anos) e correspondentes ao CPE exato
+        recent_cves = []
         for item in data.get("vulnerabilities", []):
-            if count >= MAX_CVES_PER_ASSET:
-                break
-
             cve_id = item["cve"]["id"]
             published = item["cve"]["published"]
 
@@ -57,11 +55,18 @@ async def fetch_new_cves(seen_db):
             if not is_recent(published):
                 continue
 
+            # Verificar se o CPE corresponde exatamente
+            cpe_matches = [v["cpe23Uri"] for v in item["cve"].get("configurations", {}).get("nodes", []) if "cpeMatch" in v]
+            exact_match = any(cpe == cm for node in item["cve"].get("configurations", {}).get("nodes", []) 
+                              for cm in node.get("cpeMatch", []) if "cpe23Uri" in cm)
+            if not exact_match:
+                continue
+
             # Cruzamento básico com CVE.org
             try:
                 cve_org_response = requests.get(CVE_ORG_URL + cve_id, timeout=5)
                 if cve_id not in cve_org_response.text:
-                    continue  # Ignorar se não existir no CVE.org
+                    continue
             except:
                 continue
 
@@ -89,11 +94,16 @@ async def fetch_new_cves(seen_db):
                 cvss2 = metrics.get("cvssMetricV2")
                 if cvss2:
                     base_score = cvss2[0]["cvssData"]["baseScore"]
+                else:
+                    # fallback severidade textual
+                    sev_text = item["cve"].get("problemtype", {}).get("problemtype_data", [])
+                    if sev_text:
+                        critical = any("Critical" in pt["description"][0]["value"] for pt in sev_text)
 
             if base_score >= 9.0:
                 critical = True
 
-            new_cves.append({
+            recent_cves.append({
                 "cve_id": cve_id,
                 "description": description,
                 "published_date": published,
@@ -103,7 +113,8 @@ async def fetch_new_cves(seen_db):
                 "asset": asset_name
             })
 
-            count += 1
+        # Ordenar por data e pegar somente as MAX_CVES_PER_ASSET mais recentes
+        recent_cves.sort(key=lambda x: x["published_date"], reverse=True)
+        new_cves.extend(recent_cves[:MAX_CVES_PER_ASSET])
 
-    # Retornar apenas CVEs novas
     return [cve for cve in new_cves if cve["is_new"]]
