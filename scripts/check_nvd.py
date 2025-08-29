@@ -1,19 +1,3 @@
-No discord ainda não está seguindo o layout desejado o que está havendo?
-
-o layout é esse ┣ Red Hat Enterprise Linux 9 ┩
-CVE-2025-12345 / 2025-08-28 / 14:23 UTC
-🔗 https://nvd.nist.gov/vuln/detail/CVE-2025-12345
-
-┣ Oracle Database 19c ┩
-CVE-2025-54321 / 2025-08-27 / 10:12 UTC
-🔗 https://nvd.nist.gov/vuln/detail/CVE-2025-54321
-
-...e assim por diante
-
-que deve funcionar no código :
-
-
-
 import requests
 import json
 import os
@@ -168,4 +152,3 @@ async def on_ready():
 # INICIAR BOT
 # -------------------------------
 bot.run(DISCORD_TOKEN)
-
