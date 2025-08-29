@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timezone
 import discord
 from discord.ext import commands, tasks
-from dateutil import parser  # para formatar datas ISO 8601
 
 # -------------------------------
 # CONFIGURAÇÕES DO BOT
@@ -30,7 +29,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DB_FILE = "seen_bd.json"
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w") as f:
-        json.dump([], f)
+        json.dump([], f, indent=2)
 
 
 def load_seen():
@@ -68,16 +67,27 @@ def filter_assets_last(vulns):
         descs = cve.get("descriptions", [])
         desc_text = " ".join(d["value"] for d in descs if "value" in d)
         cve_id = cve.get("id")
-        published = cve.get("published", "N/A")
+        published_iso = cve.get("published", None)
+
+        # Formata a data ISO 8601 para 'YYYY-MM-DD / HH:MM UTC'
+        if published_iso:
+            try:
+                dt = datetime.strptime(published_iso, "%Y-%m-%dT%H:%M:%SZ")
+                published_str = f"{dt.strftime('%Y-%m-%d')} / {dt.strftime('%H:%M')} UTC"
+            except:
+                published_str = published_iso
+        else:
+            published_str = "N/A"
 
         for asset in ASSETS:
             if asset.lower() in desc_text.lower():
-                if matched[asset] is None or published > matched[asset]["published"]:
+                if matched[asset] is None or (published_iso and published_iso > matched[asset]["published_raw"]):
                     matched[asset] = {
                         "id": cve_id,
                         "desc": desc_text[:200] + "...",
                         "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
-                        "published": published
+                        "published": published_str,
+                        "published_raw": published_iso  # para comparar datas
                     }
     return matched
 
@@ -97,45 +107,34 @@ async def cleanup_messages(channel):
 
 
 # -------------------------------
-# FUNÇÃO: Envia alerta no Discord
+# FUNÇÃO: Envia alerta
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
-    msg_lines = []
+
+    message_text = "🚨 **Nova Vulnerabilidade Encontrada!** 🚨\n\n"
 
     for asset, cve in alerts.items():
         if cve:
-            # marca se houver nova CVE
+            any_new = True
             if cve["id"] not in seen:
                 seen.append(cve["id"])
-                any_new = True
-
-            # formata data/hora da CVE
-            try:
-                dt = parser.isoparse(cve['published'])
-                published_str = f"{dt.strftime('%Y-%m-%d')} / {dt.strftime('%H:%M')} UTC"
-            except:
-                published_str = cve['published']
-
-            # adiciona linha formatada por ativo
-            msg_lines.append(
+            message_text += (
                 f"┣ {asset} ┩\n"
-                f"{cve['id']} / {published_str}\n"
-                f"🔗 {cve['url']}\n"
+                f"{cve['id']} / {cve['published']}\n"
+                f"🔗 {cve['url']}\n\n"
             )
 
     save_seen(seen)
 
     if any_new:
-        content = "@everyone\n\n" + "\n".join(msg_lines)
-        await channel.send(content=content)
+        await channel.send(f"@everyone\n{message_text}")
     else:
-        await channel.send(
-            f"✅ Nenhuma nova vulnerabilidade encontrada.\n"
-            f"Ativos monitorados: {', '.join(ASSETS)}\n"
-            f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
-        )
+        message_text = "✅ Nenhuma nova vulnerabilidade encontrada.\n"
+        message_text += "Ativos monitorados: " + ", ".join(ASSETS)
+        message_text += f"\n🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        await channel.send(message_text)
 
 
 # -------------------------------
