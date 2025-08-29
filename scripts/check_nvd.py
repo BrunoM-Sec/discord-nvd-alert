@@ -17,7 +17,7 @@ ASSETS = [
     "Ubuntu 22.04 LTS",
     "Mozila Firefox"
 ]  # Ativos monitorados
-NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=20"
+NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=50"
 
 # -------------------------------
 # BOT DISCORD
@@ -57,10 +57,13 @@ def fetch_nvd():
 
 
 # -------------------------------
-# FUNÇÃO: Filtra ativos monitorados
+# FUNÇÃO: Filtra ativos monitorados e pega apenas a última CVE
 # -------------------------------
-def filter_assets(vulns):
-    matched = {asset: [] for asset in ASSETS}  # Lista de CVEs por ativo
+def filter_assets_last(vulns):
+    matched = {}
+    for asset in ASSETS:
+        matched[asset] = None  # inicializa
+
     for v in vulns:
         cve = v.get("cve", {})
         descs = cve.get("descriptions", [])
@@ -70,22 +73,23 @@ def filter_assets(vulns):
 
         for asset in ASSETS:
             if asset.lower() in desc_text.lower():
-                matched[asset].append({
-                    "id": cve_id,
-                    "desc": desc_text[:200] + "...",
-                    "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
-                    "published": published
-                })
+                # se não existe CVE para esse ativo ainda ou é mais recente, atualiza
+                if matched[asset] is None or published > matched[asset]["published"]:
+                    matched[asset] = {
+                        "id": cve_id,
+                        "desc": desc_text[:200] + "...",
+                        "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+                        "published": published
+                    }
     return matched
 
 
 # -------------------------------
-# FUNÇÃO: Apaga mensagens antigas (>6h)
+# FUNÇÃO: Limpa mensagens antigas (>6h)
 # -------------------------------
 async def cleanup_messages(channel):
     now = datetime.now(timezone.utc)
     async for msg in channel.history(limit=50):
-        # Apenas apaga mensagens que não tenham CVEs
         if "Nova Vulnerabilidade" not in msg.content:
             if (now - msg.created_at).total_seconds() > 21600:
                 try:
@@ -95,36 +99,39 @@ async def cleanup_messages(channel):
 
 
 # -------------------------------
-# FUNÇÃO: Envia alerta
+# FUNÇÃO: Envia alerta usando Embed
 # -------------------------------
 async def send_alerts(channel, alerts):
     seen = load_seen()
     any_new = False
 
-    msg_lines = []
-    for asset, cves in alerts.items():
-        if cves:
+    embed = discord.Embed(title="🚨 Alerta de Vulnerabilidades", color=0xff0000, timestamp=datetime.now(timezone.utc))
+    for asset, cve in alerts.items():
+        if cve:
             any_new = True
-            msg_lines.append(f"|-- {asset} --|")
-            for cve in cves:
-                # registra apenas novas CVEs no JSON
-                if cve["id"] not in seen:
-                    seen.append(cve["id"])
-                msg_lines.append(f"**{cve['id']}** / {cve['published']}")
-                msg_lines.append(f"{cve['url']}\n")
+            # registra no JSON
+            if cve["id"] not in seen:
+                seen.append(cve["id"])
+            # adiciona campo do embed
+            embed.add_field(
+                name=f"{asset}",
+                value=f"**CVE:** {cve['id']}\n**Publicado:** {cve['published']}\n🔗 [Link para CVE]({cve['url']})",
+                inline=False
+            )
+
     save_seen(seen)
 
     if any_new:
-        msg_text = "🚨 @everyone **Nova Vulnerabilidade Encontrada!** 🚨\n\n" + "\n".join(msg_lines)
-        await channel.send(msg_text)
+        embed.set_footer(text="@everyone")
+        await channel.send(content="@everyone", embed=embed)
     else:
-        # Nenhum alerta novo
-        ativos = ", ".join(ASSETS)
-        await channel.send(
-            f"✅ Nenhuma nova vulnerabilidade encontrada.\n"
-            f"Ativos monitorados: {ativos}\n"
-            f"🕒 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        embed = discord.Embed(
+            title="✅ Nenhuma nova vulnerabilidade encontrada",
+            description="Ativos monitorados: " + ", ".join(ASSETS),
+            color=0x00ff00,
+            timestamp=datetime.now(timezone.utc)
         )
+        await channel.send(embed=embed)
 
 
 # -------------------------------
@@ -136,7 +143,7 @@ async def check_nvd_task():
     if channel:
         await cleanup_messages(channel)
         vulns = fetch_nvd()
-        alerts = filter_assets(vulns)
+        alerts = filter_assets_last(vulns)
         await send_alerts(channel, alerts)
 
 
