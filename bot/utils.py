@@ -1,10 +1,11 @@
 import json
 import os
 from datetime import datetime
+from config import SEEN_DB_PATH
 
-# ---------- Funções para manipulação do seen_db.json ----------
+# ---------- Funções de manipulação do seen_db ----------
 
-def load_seen_db(filepath):
+def load_seen_db(filepath=SEEN_DB_PATH):
     """
     Carrega o banco de CVEs já reportadas.
     Se não existir, cria um dicionário vazio.
@@ -16,13 +17,12 @@ def load_seen_db(filepath):
 
     try:
         with open(filepath, "r") as f:
-            data = json.load(f)
-            return data
+            return json.load(f)
     except json.JSONDecodeError:
-        print(f"Erro ao ler {filepath}, arquivo corrompido. Criando novo.")
+        print(f"Aviso: {filepath} corrompido. Criando novo banco vazio.")
         return {}
 
-def save_seen_db(data, filepath):
+def save_seen_db(data, filepath=SEEN_DB_PATH):
     """
     Salva o banco de CVEs já reportadas.
     """
@@ -31,7 +31,6 @@ def save_seen_db(data, filepath):
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"Erro ao salvar {filepath}: {e}")
-
 
 # ---------- Funções utilitárias ----------
 
@@ -48,13 +47,11 @@ def is_critical(cvss_score, threshold=9.0):
 
 def format_cve_message(cve):
     """
-    Formata mensagem de CVE de forma uniforme
+    Formata a mensagem de CVE de forma uniforme para envio no Discord
     """
     msg = f"**{cve['cve_id']}**\n"
     msg += f"Ativo: {cve['asset']}\n"
     msg += f"Data de Publicação: {cve['published_date']}\n"
     msg += f"{cve['description']}\n"
-    msg += f"Link: {cve['url']}"
-    if cve.get("critical"):
-        msg = "CRITICAL ⚠️\n" + msg
+    msg += f"Links: CVE.org({cve.get('cve_url','')}) | NVD({cve.get('nist_url','')})"
     return msg
