@@ -1,4 +1,4 @@
-name: Discord Threat Intelligence Bot
+name: Discord Threat Intelligence Bot #nome
 
 concurrency:
   group: discord-nvd-alert
