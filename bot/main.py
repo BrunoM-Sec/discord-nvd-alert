@@ -1,6 +1,5 @@
 import discord
 from discord.ext import tasks, commands
-import asyncio
 import datetime
 import os
 
@@ -10,9 +9,8 @@ from commands import register_message_commands
 from utils import load_seen_db, save_seen_db, format_cve_message
 from config import CHANNEL_ID
 
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")  # Token do bot
-GUILD_ID = int(os.getenv("DISCORD_GUILD_ID"))  # ID do servidor
-CHANNEL_ID = CHANNEL_ID  # Definido no config.py
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID"))
 
 # Configurar intents
 intents = discord.Intents.default()
@@ -32,9 +30,23 @@ async def on_ready():
     print(f"Bot conectado como {bot.user}")
     channel = bot.get_channel(bot.channel_id)
     await channel.send("Bot de Threat Intelligence iniciado e online.")
+    await send_last_status(channel)
     monitor_cves.start()
     auto_cleanup.start(bot)
     register_message_commands(bot)
+
+async def send_last_status(channel):
+    """
+    Envia relatório das últimas CVEs se o seen_db não estiver vazio.
+    """
+    if not bot.seen_db:
+        await channel.send("Nenhuma CVE registrada ainda.")
+        return
+
+    msg = "**Status das últimas CVEs por ativo:**\n"
+    for cve in bot.seen_db.values():
+        msg += f"{cve['asset']}: {cve['cve_id']} publicada em {cve['timestamp']} - {cve['url']}\n"
+    await channel.send(msg)
 
 # ---------- Tarefa de Monitoramento ----------
 
@@ -51,13 +63,8 @@ async def monitor_cves():
             mention = "@everyone " if cve.get("critical") else ""
             await channel.send(mention + format_cve_message(cve))
     else:
-        # Caso não haja novas CVEs, enviar mensagem com a última CVE de cada ativo
-        msg = "**Status das últimas CVEs por ativo:**\n"
-        for asset, cve in bot.seen_db.items():
-            msg += f"{cve['asset']}: {cve['cve_id']} publicada em {cve['timestamp']} - {cve['url']}\n"
-        await channel.send(msg)
-
-    save_seen_db(bot.seen_db, "data/seen_db.json")
+        # Caso não haja novas CVEs, enviar última CVE por ativo
+        await send_last_status(channel)
 
 # ---------- Rodando o bot ----------
 
