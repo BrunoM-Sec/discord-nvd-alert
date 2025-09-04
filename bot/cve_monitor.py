@@ -26,10 +26,11 @@ def fetch_latest_cve_from_cveorg(url):
         if not table:
             return None
 
-        first_row = table.find("tr")
-        if not first_row:
+        rows = table.find_all("tr")[1:]  # Pula o header da tabela
+        if not rows:
             return None
 
+        first_row = rows[0]
         cve_id_cell = first_row.find("a")
         if not cve_id_cell:
             return None
@@ -50,9 +51,12 @@ def fetch_cve_details_from_nvd(cve_id):
         response = requests.get(f"{NVD_API_URL}?cveId={cve_id}", timeout=10)
         response.raise_for_status()
         data = response.json()
-        vuln = data.get("vulnerabilities", [])[0]["cve"]
+        vuln_list = data.get("vulnerabilities", [])
+        if not vuln_list:
+            return {"published_date": None, "critical": False, "nist_url": ""}
 
-        published = vuln["published"]
+        vuln = vuln_list[0]["cve"]
+        published = vuln.get("published")
         metrics = vuln.get("metrics", {})
         cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
         cvss2 = metrics.get("cvssMetricV2")
