@@ -1,110 +1,117 @@
 import requests
-import datetime
-from utils import load_seen_db, is_critical
-
-# Constantes dos ativos monitorados (CPEs exatos)
-ASSETS_CPE = {
-    "Red Hat Enterprise Linux 9": "cpe:2.3:o:redhat:enterprise_linux:9",
-    "Oracle Database 19c": "cpe:2.3:a:oracle:database:19c",
-    "Mozilla Firefox": "cpe:2.3:a:mozilla:firefox",
-    "Juniper MX Series": "cpe:2.3:h:juniper:mx_series",
-    "Ubuntu 22.04": "cpe:2.3:o:canonical:ubuntu_linux:22.04"
-}
+from bs4 import BeautifulSoup
+from datetime import datetime
+from utils import load_seen_db, save_seen_db, is_critical
+from config import ASSETS_URLS, MAX_CVES_PER_ASSET, YEARS_LIMIT
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-CVE_ORG_URL = "https://cve.mitre.org/cgi-bin/cvename.cgi?name="
-
-MAX_CVES_PER_ASSET = 2  # Pega apenas 2 CVEs mais recentes
-YEARS_LIMIT = 3  # Ignorar CVEs com mais de 3 anos
 
 def is_recent(published_date_str):
-    published_date = datetime.datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%f")
-    return (datetime.datetime.utcnow() - published_date).days <= YEARS_LIMIT * 365
+    published_date = datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%f")
+    return (datetime.utcnow() - published_date).days <= YEARS_LIMIT * 365
+
+def fetch_latest_cve_from_cveorg(url):
+    """
+    Consulta CVE.org e retorna a última CVE publicada no ativo específico.
+    Retorna dicionário com 'cve_id' e 'cve_url'.
+    """
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Buscar primeira CVE na tabela de resultados
+        table = soup.find("table", {"id": "TableWithCVE"})
+        if not table:
+            return None
+
+        first_row = table.find("tr")
+        if not first_row:
+            return None
+
+        cve_id_cell = first_row.find("a")
+        if not cve_id_cell:
+            return None
+
+        cve_id = cve_id_cell.text.strip()
+        cve_url = "https://www.cve.org" + cve_id_cell.get("href")
+        return {"cve_id": cve_id, "cve_url": cve_url}
+
+    except Exception as e:
+        print(f"Erro ao consultar CVE.org: {e}")
+        return None
+
+def fetch_cve_details_from_nvd(cve_id):
+    """
+    Consulta NVD para pegar detalhes de severidade e data da CVE
+    """
+    try:
+        response = requests.get(f"{NVD_API_URL}?cveId={cve_id}", timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        vuln = data.get("vulnerabilities", [])[0]["cve"]
+
+        # Data de publicação
+        published = vuln["published"]
+        # Severidade CVSSv3 ou CVSSv2
+        metrics = vuln.get("metrics", {})
+        cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
+        cvss2 = metrics.get("cvssMetricV2")
+
+        base_score = 0
+        if cvss3:
+            base_score = cvss3[0]["cvssData"]["baseScore"]
+        elif cvss2:
+            base_score = cvss2[0]["cvssData"]["baseScore"]
+
+        critical = is_critical(base_score)
+        return {"published_date": published, "critical": critical, "nist_url": f"https://nvd.nist.gov/vuln/detail/{cve_id}"}
+
+    except Exception as e:
+        print(f"Erro ao consultar NVD para {cve_id}: {e}")
+        return {"published_date": None, "critical": False, "nist_url": ""}
+
 
 async def fetch_new_cves(seen_db):
     """
-    Consulta NVD para buscar CVEs recentes para os ativos específicos.
-    Retorna uma lista de CVEs novas e críticas.
+    Retorna lista de CVEs novas e críticas para todos os ativos monitorados.
     """
     new_cves = []
 
-    for asset_name, cpe in ASSETS_CPE.items():
-        params = {
-            "cpeName": cpe,
-            "resultsPerPage": MAX_CVES_PER_ASSET,
-            "startIndex": 0,
-            "sortBy": "publishedDate",
-            "orderBy": "desc"
-        }
-
-        try:
-            response = requests.get(NVD_API_URL, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-        except Exception as e:
-            print(f"Erro ao consultar NVD para {asset_name}: {e}")
+    for asset, url in ASSETS_URLS.items():
+        latest_cve = fetch_latest_cve_from_cveorg(url)
+        if not latest_cve:
             continue
 
-        count = 0
-        for item in data.get("vulnerabilities", []):
-            if count >= MAX_CVES_PER_ASSET:
-                break
+        cve_id = latest_cve["cve_id"]
+        cve_url = latest_cve["cve_url"]
 
-            cve_id = item["cve"]["id"]
-            published = item["cve"]["published"]
+        # Ignorar se já reportada
+        if cve_id in seen_db:
+            continue
 
-            # Ignorar CVEs muito antigas
-            if not is_recent(published):
-                continue
+        # Buscar detalhes no NVD
+        details = fetch_cve_details_from_nvd(cve_id)
+        if not details["published_date"] or not is_recent(details["published_date"]):
+            continue
 
-            # Cruzamento com CVE.org
-            try:
-                cve_org_response = requests.get(CVE_ORG_URL + cve_id, timeout=5)
-                if cve_id not in cve_org_response.text:
-                    continue
-            except:
-                continue
+        # Construir CVE completo
+        cve_info = {
+            "cve_id": cve_id,
+            "asset": asset,
+            "description": f"Nova vulnerabilidade detectada em {asset}",
+            "published_date": details["published_date"],
+            "cve_url": cve_url,
+            "nist_url": details["nist_url"],
+            "critical": details["critical"],
+            "is_new": True
+        }
 
-            # Checar se já foi reportada
-            if cve_id in seen_db:
-                is_new = False
-            else:
-                is_new = True
-                seen_db[cve_id] = {"asset": asset_name, "timestamp": published, "critical": False}
+        # Adiciona ao banco local
+        seen_db[cve_id] = {"asset": asset, "timestamp": details["published_date"]}
 
-            description = next(
-                (desc["value"] for desc in item["cve"]["descriptions"] if desc["lang"] == "en"),
-                item["cve"]["descriptions"][0]["value"]
-            )
-            url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
+        new_cves.append(cve_info)
 
-            # Checar severidade (CVSSv3 ou CVSSv2)
-            metrics = item["cve"].get("metrics", {})
-            cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
-            critical = False
-            base_score = 0
-            if cvss3:
-                base_score = cvss3[0]["cvssData"]["baseScore"]
-            else:
-                cvss2 = metrics.get("cvssMetricV2")
-                if cvss2:
-                    base_score = cvss2[0]["cvssData"]["baseScore"]
-
-            critical = is_critical(base_score)
-            if is_new:
-                seen_db[cve_id]["critical"] = critical
-
-            new_cves.append({
-                "cve_id": cve_id,
-                "description": description,
-                "published_date": published,
-                "url": url,
-                "critical": critical,
-                "is_new": is_new,
-                "asset": asset_name
-            })
-
-            count += 1
-
-    # Retornar apenas CVEs novas
-    return [cve for cve in new_cves if cve["is_new"]]
+    # Salvar banco atualizado
+    save_seen_db(seen_db)
+    return new_cves
