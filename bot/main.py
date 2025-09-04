@@ -19,10 +19,25 @@ intents.messages = True
 bot = commands.Bot(command_prefix="-", intents=intents)
 bot.uptime_start = datetime.datetime.utcnow()
 bot.pause_reports = False
-bot.seen_db = load_seen_db()
+bot.seen_db = load_seen_db("data/seen_db.json")
 bot.channel_id = CHANNEL_ID
 
-# ---------- Função de envio de status inicial ----------
+# ---------- Eventos Básicos ----------
+
+@bot.event
+async def on_ready():
+    print(f"Bot conectado como {bot.user}")
+    channel = bot.get_channel(bot.channel_id)
+    await channel.send("Bot de Threat Intelligence iniciado e online.")
+    await send_last_status(channel)
+
+    # ⬅ Iniciar monitor apenas se ainda não estiver rodando
+    if not monitor_cves.is_running():
+        monitor_cves.start()
+
+    # Registrar comandos apenas uma vez
+    register_message_commands(bot)
+
 async def send_last_status(channel):
     """
     Envia relatório das últimas CVEs se o seen_db não estiver vazio.
@@ -33,27 +48,11 @@ async def send_last_status(channel):
 
     msg = "**Status das últimas CVEs por ativo:**\n"
     for cve in bot.seen_db.values():
-        msg += f"{cve['asset']}: {cve['cve_id']} publicada em {cve['timestamp']} - {cve.get('url','')}\n"
+        msg += f"{cve['asset']}: {cve['cve_id']} publicada em {cve['timestamp']} - {cve['url']}\n"
     await channel.send(msg)
 
-# ---------- Evento on_ready ----------
-@bot.event
-async def on_ready():
-    print(f"Bot conectado como {bot.user}")
-    channel = bot.get_channel(bot.channel_id)
+# ---------- Tarefa de Monitoramento ----------
 
-    # Envia status inicial apenas se houver CVEs
-    if bot.seen_db:
-        await send_last_status(channel)
-
-    # Inicia monitoramento apenas se não estiver rodando
-    if not monitor_cves.is_running():
-        monitor_cves.start()
-
-    # Registra comandos de chat apenas uma vez
-    register_message_commands(bot)
-
-# ---------- Task de monitoramento ----------
 @tasks.loop(minutes=60)
 async def monitor_cves():
     if bot.pause_reports:
@@ -66,9 +65,9 @@ async def monitor_cves():
         for cve in new_cves:
             mention = "@everyone " if cve.get("critical") else ""
             await channel.send(mention + format_cve_message(cve))
-
-    # Salvar estado após cada loop
-    save_seen_db(bot.seen_db)
+    else:
+        await send_last_status(channel)
 
 # ---------- Rodando o bot ----------
+
 bot.run(TOKEN)
