@@ -1,13 +1,16 @@
 import discord
 from datetime import datetime, timedelta
 from utils import format_cve_message
+from cve_monitor import fetch_new_cves
 
+# Prefixo do comando
 PREFIX = "-"
 
 def register_message_commands(bot):
 
     @bot.event
     async def on_message(message):
+        # Ignora mensagens do próprio bot
         if message.author == bot.user:
             return
 
@@ -40,16 +43,15 @@ def register_message_commands(bot):
 
 async def clear_messages(bot, channel):
     """
-    Remove mensagens não críticas das últimas 6h
+    Remove mensagens não críticas das últimas 6h.
+    Nunca apaga mensagens com @everyone.
     """
     six_hours_ago = datetime.utcnow() - timedelta(hours=6)
-    async for msg in channel.history(limit=500, after=six_hours_ago):
-        if not msg.author.bot:
-            continue
-        if "CRITICAL" not in msg.content.upper():
+    async for msg in channel.history(limit=200, after=six_hours_ago):
+        if msg.author.bot and "@everyone" not in msg.content:
             try:
                 await msg.delete()
-                await asyncio.sleep(0.3)
+                await discord.utils.sleep_until(datetime.utcnow() + timedelta(seconds=0.5))
             except discord.errors.Forbidden:
                 print("Sem permissão para deletar mensagem.")
             except discord.errors.HTTPException:
@@ -61,27 +63,20 @@ async def list_critical_reports(bot, channel):
     if not criticals:
         await channel.send("Nenhuma CVE crítica ativa.")
         return
-    msg = "CVE(s) críticas atuais:\n"
-    for cve_id, data in bot.seen_db.items():
-        if data.get("critical"):
-            msg += f"{data['asset']} - {cve_id}\n"
+    msg = "**CVE(s) críticas atuais:**\n"
+    for cve in criticals:
+        msg += f"{cve['cve_id']} - {cve['asset']} - {cve['published_date']}\n"
     await channel.send(msg)
 
 async def force_new_reports(bot, channel):
     """
-    Executa uma busca imediata por novas CVEs, reportando no canal
+    Força a consulta imediata de novas CVEs.
     """
-    from cve_monitor import fetch_new_cves
     new_cves = await fetch_new_cves(bot.seen_db)
     if not new_cves:
-        # Exibir últimas CVEs caso não haja novas
-        msg = "Nenhuma nova CVE encontrada.\nÚltimas CVEs conhecidas:\n"
-        for cve_id, data in bot.seen_db.items():
-            msg += f"{data['asset']} - {cve_id} (CRITICAL ⚠️)\n" if data.get("critical") else f"{data['asset']} - {cve_id}\n"
-        await channel.send(msg)
+        await channel.send("Nenhuma CVE nova encontrada no momento.")
         return
 
     for cve in new_cves:
-        message = format_cve_message(cve)
         mention = "@everyone " if cve.get("critical") else ""
-        await channel.send(mention + message)
+        await channel.send(mention + format_cve_message(cve))
