@@ -4,13 +4,9 @@ import datetime
 import os
 
 from cve_monitor import fetch_new_cves
-from cleanup import auto_cleanup
 from commands import register_message_commands
 from utils import load_seen_db, save_seen_db, format_cve_message
-from config import CHANNEL_ID
-
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-GUILD_ID = int(os.getenv("DISCORD_GUILD_ID"))
+from config import CHANNEL_ID, TOKEN
 
 # Configurar intents
 intents = discord.Intents.default()
@@ -32,7 +28,6 @@ async def on_ready():
     await channel.send("Bot de Threat Intelligence iniciado e online.")
     await send_last_status(channel)
     monitor_cves.start()
-    auto_cleanup.start(bot)
     register_message_commands(bot)
 
 async def send_last_status(channel):
@@ -63,7 +58,6 @@ async def monitor_cves():
             mention = "@everyone " if cve.get("critical") else ""
             await channel.send(mention + format_cve_message(cve))
     else:
-        # Caso não haja novas CVEs, enviar última CVE por ativo
         await send_last_status(channel)
 
 # ---------- Rodando o bot ----------
