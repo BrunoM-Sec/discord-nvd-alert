@@ -7,8 +7,11 @@ from config import ASSETS_URLS, MAX_CVES_PER_ASSET, YEARS_LIMIT
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
 def is_recent(published_date_str):
-    published_date = datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%f")
-    return (datetime.utcnow() - published_date).days <= YEARS_LIMIT * 365
+    try:
+        published_date = datetime.strptime(published_date_str, "%Y-%m-%dT%H:%M:%S.%f")
+        return (datetime.utcnow() - published_date).days <= YEARS_LIMIT * 365
+    except Exception:
+        return False
 
 def fetch_latest_cve_from_cveorg(url):
     """
@@ -19,8 +22,6 @@ def fetch_latest_cve_from_cveorg(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-
-        # Buscar primeira CVE na tabela de resultados
         table = soup.find("table", {"id": "TableWithCVE"})
         if not table:
             return None
@@ -51,9 +52,7 @@ def fetch_cve_details_from_nvd(cve_id):
         data = response.json()
         vuln = data.get("vulnerabilities", [])[0]["cve"]
 
-        # Data de publicação
         published = vuln["published"]
-        # Severidade CVSSv3 ou CVSSv2
         metrics = vuln.get("metrics", {})
         cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
         cvss2 = metrics.get("cvssMetricV2")
@@ -108,10 +107,16 @@ async def fetch_new_cves(seen_db):
         }
 
         # Adiciona ao banco local
-        seen_db[cve_id] = {"asset": asset, "timestamp": details["published_date"]}
+        seen_db[cve_id] = {
+            "asset": asset,
+            "timestamp": details["published_date"],
+            "cve_id": cve_id,
+            "url": cve_url,
+            "nist_url": details["nist_url"],
+            "critical": details["critical"]
+        }
 
         new_cves.append(cve_info)
 
-    # Salvar banco atualizado
     save_seen_db(seen_db)
     return new_cves
