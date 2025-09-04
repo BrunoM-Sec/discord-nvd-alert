@@ -1,9 +1,8 @@
 import discord
-from datetime import datetime, timedelta
-from utils import format_cve_message
+from datetime import datetime
 from cve_monitor import fetch_new_cves
+from utils import format_cve_message
 
-# Prefixo do comando
 PREFIX = "-"
 
 def register_message_commands(bot):
@@ -16,8 +15,30 @@ def register_message_commands(bot):
 
         content = message.content.lower()
 
+        # ---------- Comando: help ----------
+        if content.startswith(f"{PREFIX}help"):
+            help_msg = (
+                "**Comandos disponíveis:**\n"
+                "- `-uptime`: Mostra há quanto tempo o bot está ativo.\n"
+                "- `-pause`: Pausa ou retoma os reports automáticos.\n"
+                "- `-return`: Retoma os reports caso estejam pausados.\n"
+                "- `-clear`: Limpa mensagens não críticas das últimas 6h.\n"
+                "- `-critical-reports`: Lista todas as CVEs críticas.\n"
+                "- `-new-reports`: Força consulta imediata de novas CVEs.\n"
+                "- `-help`: Mostra esta mensagem."
+            )
+            await message.channel.send(help_msg)
+
+        # ---------- Comando: return ----------
+        elif content.startswith(f"{PREFIX}return"):
+            if bot.pause_reports:
+                bot.pause_reports = False
+                await message.channel.send("Envio de reports retomado.")
+            else:
+                await message.channel.send("O bot já está ativo.")
+
         # ---------- Comando: uptime ----------
-        if content.startswith(f"{PREFIX}uptime"):
+        elif content.startswith(f"{PREFIX}uptime"):
             delta = datetime.utcnow() - bot.uptime_start
             await message.channel.send(f"Bot ativo há {str(delta).split('.')[0]}")
 
@@ -39,6 +60,7 @@ def register_message_commands(bot):
         elif content.startswith(f"{PREFIX}new-reports"):
             await force_new_reports(bot, message.channel)
 
+
 # ---------- Funções auxiliares ----------
 
 async def clear_messages(bot, channel):
@@ -51,7 +73,6 @@ async def clear_messages(bot, channel):
         if msg.author.bot and "@everyone" not in msg.content:
             try:
                 await msg.delete()
-                await discord.utils.sleep_until(datetime.utcnow() + timedelta(seconds=0.5))
             except discord.errors.Forbidden:
                 print("Sem permissão para deletar mensagem.")
             except discord.errors.HTTPException:
