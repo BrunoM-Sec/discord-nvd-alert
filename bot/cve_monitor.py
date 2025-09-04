@@ -22,21 +22,21 @@ def fetch_latest_cve_from_cveorg(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        table = soup.find("table", {"id": "TableWithCVE"})
-        if not table:
+
+        container = soup.find("div", {"id": "cve-search-results-container"})
+        if not container:
+            print("Container de resultados não encontrado.")
             return None
 
-        rows = table.find_all("tr")[1:]  # Pula o header da tabela
-        if not rows:
+        # Buscar todos os links que contenham '/CVERecord/'
+        cve_links = container.find_all("a", href=lambda x: x and "/CVERecord/" in x)
+        if not cve_links:
+            print("Nenhum link de CVE encontrado.")
             return None
 
-        first_row = rows[0]
-        cve_id_cell = first_row.find("a")
-        if not cve_id_cell:
-            return None
-
-        cve_id = cve_id_cell.text.strip()
-        cve_url = "https://www.cve.org" + cve_id_cell.get("href")
+        first_link = cve_links[0]
+        cve_id = first_link.text.strip()
+        cve_url = "https://www.cve.org" + first_link.get("href")
         return {"cve_id": cve_id, "cve_url": cve_url}
 
     except Exception as e:
@@ -54,8 +54,8 @@ def fetch_cve_details_from_nvd(cve_id):
         vuln_list = data.get("vulnerabilities", [])
         if not vuln_list:
             return {"published_date": None, "critical": False, "nist_url": ""}
-
         vuln = vuln_list[0]["cve"]
+
         published = vuln.get("published")
         metrics = vuln.get("metrics", {})
         cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
@@ -73,7 +73,6 @@ def fetch_cve_details_from_nvd(cve_id):
     except Exception as e:
         print(f"Erro ao consultar NVD para {cve_id}: {e}")
         return {"published_date": None, "critical": False, "nist_url": ""}
-
 
 async def fetch_new_cves(seen_db):
     """
