@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from utils import load_seen_db, save_seen_db, is_critical
-from config import ASSETS_URLS, MAX_CVES_PER_ASSET, YEARS_LIMIT
+from config import ASSETS_URLS, YEARS_LIMIT
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
@@ -13,10 +13,9 @@ def is_recent(published_date_str):
     except Exception:
         return False
 
-def fetch_latest_cve_from_cveorg(url):
+def fetch_latest_cves_from_cveorg(url, max_results=1):
     """
-    Consulta CVE.org e retorna a última CVE publicada no ativo específico.
-    Retorna dicionário com 'cve_id' e 'cve_url'.
+    Consulta CVE.org e retorna até max_results CVEs mais recentes.
     """
     try:
         response = requests.get(url, timeout=10)
@@ -25,23 +24,24 @@ def fetch_latest_cve_from_cveorg(url):
 
         container = soup.find("div", {"id": "cve-search-results-container"})
         if not container:
-            print("Container de resultados não encontrado.")
-            return None
+            return []
 
-        # Buscar todos os links que contenham '/CVERecord/'
-        cve_links = container.find_all("a", href=lambda x: x and "/CVERecord/" in x)
-        if not cve_links:
-            print("Nenhum link de CVE encontrado.")
-            return None
-
-        first_link = cve_links[0]
-        cve_id = first_link.text.strip()
-        cve_url = "https://www.cve.org" + first_link.get("href")
-        return {"cve_id": cve_id, "cve_url": cve_url}
+        # Pega links dentro do container
+        links = container.find_all("a", href=True)
+        cves = []
+        for link in links:
+            href = link.get("href", "")
+            if "/CVERecord/" in href:
+                cve_id = link.text.strip()
+                cve_url = "https://www.cve.org" + href
+                cves.append({"cve_id": cve_id, "cve_url": cve_url})
+                if len(cves) >= max_results:
+                    break
+        return cves
 
     except Exception as e:
         print(f"Erro ao consultar CVE.org: {e}")
-        return None
+        return []
 
 def fetch_cve_details_from_nvd(cve_id):
     """
@@ -51,12 +51,9 @@ def fetch_cve_details_from_nvd(cve_id):
         response = requests.get(f"{NVD_API_URL}?cveId={cve_id}", timeout=10)
         response.raise_for_status()
         data = response.json()
-        vuln_list = data.get("vulnerabilities", [])
-        if not vuln_list:
-            return {"published_date": None, "critical": False, "nist_url": ""}
-        vuln = vuln_list[0]["cve"]
+        vuln = data.get("vulnerabilities", [])[0]["cve"]
 
-        published = vuln.get("published")
+        published = vuln.get("published", None)
         metrics = vuln.get("metrics", {})
         cvss3 = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30")
         cvss2 = metrics.get("cvssMetricV2")
@@ -77,49 +74,50 @@ def fetch_cve_details_from_nvd(cve_id):
 async def fetch_new_cves(seen_db):
     """
     Retorna lista de CVEs novas e críticas para todos os ativos monitorados.
+    Atualiza o seen_db automaticamente.
     """
     new_cves = []
 
     for asset, url in ASSETS_URLS.items():
-        latest_cve = fetch_latest_cve_from_cveorg(url)
-        if not latest_cve:
+        latest_cves = fetch_latest_cves_from_cveorg(url, max_results=1)
+        if not latest_cves:
             continue
 
-        cve_id = latest_cve["cve_id"]
-        cve_url = latest_cve["cve_url"]
+        for latest_cve in latest_cves:
+            cve_id = latest_cve["cve_id"]
+            cve_url = latest_cve["cve_url"]
 
-        # Ignorar se já reportada
-        if cve_id in seen_db:
-            continue
+            if cve_id in seen_db:
+                continue  # já reportada
 
-        # Buscar detalhes no NVD
-        details = fetch_cve_details_from_nvd(cve_id)
-        if not details["published_date"] or not is_recent(details["published_date"]):
-            continue
+            # Buscar detalhes no NVD
+            details = fetch_cve_details_from_nvd(cve_id)
+            if not details["published_date"] or not is_recent(details["published_date"]):
+                continue
 
-        # Construir CVE completo
-        cve_info = {
-            "cve_id": cve_id,
-            "asset": asset,
-            "description": f"Nova vulnerabilidade detectada em {asset}",
-            "published_date": details["published_date"],
-            "cve_url": cve_url,
-            "nist_url": details["nist_url"],
-            "critical": details["critical"],
-            "is_new": True
-        }
+            # Construir CVE completo
+            cve_info = {
+                "cve_id": cve_id,
+                "asset": asset,
+                "description": f"Nova vulnerabilidade detectada em {asset}",
+                "published_date": details["published_date"],
+                "cve_url": cve_url,
+                "nist_url": details["nist_url"],
+                "critical": details["critical"],
+                "is_new": True
+            }
 
-        # Adiciona ao banco local
-        seen_db[cve_id] = {
-            "asset": asset,
-            "timestamp": details["published_date"],
-            "cve_id": cve_id,
-            "url": cve_url,
-            "nist_url": details["nist_url"],
-            "critical": details["critical"]
-        }
+            # Atualiza o banco
+            seen_db[cve_id] = {
+                "asset": asset,
+                "timestamp": details["published_date"],
+                "cve_id": cve_id,
+                "url": cve_url,
+                "nist_url": details["nist_url"],
+                "critical": details["critical"]
+            }
 
-        new_cves.append(cve_info)
+            new_cves.append(cve_info)
 
     save_seen_db(seen_db)
     return new_cves
