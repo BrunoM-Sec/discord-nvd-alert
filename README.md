@@ -1,5 +1,5 @@
 # Discord NVD Threat Intelligence Bot
-
+#ESSE BOT ATUALMENTE ESTÁ INCOMPLETO E EM FASE DE DESENOLVIMENTO#
 ## Objetivo
 
 Este bot é um **especialista em Threat Intelligence**, projetado para monitorar novas vulnerabilidades (CVEs) em ativos específicos da empresa e reportar automaticamente em um servidor privado do Discord.  
